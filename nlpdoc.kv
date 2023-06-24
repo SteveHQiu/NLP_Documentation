@@ -1,0 +1,68 @@
+#:kivy 2.1.0
+
+<CPopup>:
+    title: "Please wait..."
+    size_hint: 0.7, 0.25
+    auto_dismiss: False
+    Label:
+        text: 'Checking drugs against database'
+        text_size: self.width, None
+        padding: dp(10), dp(10)
+
+<CButton>:
+    size: self.texture_size
+    padding: dp(10), dp(10)
+    
+<CScrollView>:
+    id: cscrollview
+    size_hint_y: None # Set size_hint to none to manual set height
+    height: sp(30)
+    BoxLayout:
+        id: button_box
+        orientation: 'horizontal'
+        size_hint_x: None
+        width: self.minimum_width
+
+<CBoxLayout>:
+    orientation: "horizontal"
+    
+    BoxLayout:
+        orientation: "vertical"
+        size_hint_x: 0.15
+        Button:
+            text: "Duplicate tab"
+            on_press: root.dupeTab()
+        ToggleButton:
+            id: rec
+            text: "Toggle"
+            on_touch_down: root.initRecording()
+        Label:
+            id: timetracker
+            size_hint_y: 0.1
+            text: "00:00:00"
+        # Button:
+        #     text: "Transcribe"
+        #     on_press: root.transcribeRecording() 
+        Button:
+            text: "Copy label"
+            on_press: root.copyLabel() # Root always refers to base widge/template from current context
+    ScrollView:
+        id: scrlv
+        do_scroll_y: True
+        TextInput:
+            id: output_text
+            write_tab: False
+            hint_text: "Transcription will appear here"
+            size_hint: 1, None
+            height: max((len(self._lines)+1) * self.line_height, scrlv.height)
+            # on_text: root.genOutput()
+
+RootLayout:
+    id: rootlayout
+    # Can also directly access ids via <root element>.ids property
+    do_default_tab: False # Remove default tab
+
+    CTabbedPanelItem:
+        text: "Tab 1"
+        CBoxLayout:
+
