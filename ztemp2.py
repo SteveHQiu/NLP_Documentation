@@ -14,6 +14,7 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 COL_MEDPROB = "Medical problem that event is related to"
 COL_EVENT = "Clinical event"
 COL_DATE = "Event date (or 'N/A' if not mentioned)"
+COL_DATE_NEW = "Event date"
 COL_REASON = "Reasoning for 'Event date' output"
 #%%
 @dataclass
@@ -53,7 +54,42 @@ def queryGPT(query, system_query = None, model = "gpt-3.5-turbo"):
 
 
 doc_list: list[str] = []
-#%% Appending docs
+
+#%% Appending docs for RF
+doc_list.append("""Document date: June 19, 2023
+Document type: Admission note
+
+Identification: Robert Foulds is a 79 year old gentleman from retirement home presenting to hospital as a CODE STROKE protocol for intermittent left sided weakness early and then right facial droop with slurred speech in context of recent treatment for pneumonia
+
+Social History: He says he is a lifelong non-smoker.  He denied any current alcohol or recreational drug use.  He reports living in a University Gates retirement home with his wife.  He ambulates with a walker at baseline
+
+HPI:
+Robert is a 79 year old gentleman from University Gates retirement home who presented to hospital as a code stroke protocol.  According to emergency physician and stroke physicians collateral history, it was noted he had intermittent left sided weakness early and then right facial droop with slurred speech noted around 14:30. Apparently he is typically very sharp and witty.  At the time, he cannot provide a clear history. The daughter apparently noted that he has had a recent change in his speech - denies that it has been going on 6 weeks.
+
+When I went to assess Robert, he was not confused and was able to answer all my questions.  He is unsure why he was here but tells me that he has been having a productive cough of green sputum since Saturday with no fever.  He was prescribed antibiotics by his family physician which I not on ClinicalConnect is levofloxacin.  He says he is taking it twice daily but the strength is 250 mg levofloxacin that was prescribed to him with 14 tablets for 7-day duration.  He reports his cough was improving and last night he coughed was around 12 PM.  He denies any ongoing shortness of breath, fever, chills, chest pain, nausea or vomiting.  He says he normally gets confused and not very coherent before 11 AM.  He does have baseline Parkinson's which he reports improved with taking Sinemet he claims is 2 hours at a time 7 times per day. It has improved symptoms.  He denied any recent sick contacts.  He denied nausea, diarrhea, UTI symptoms.  He does have difficulty ambulating at baseline he uses a walker with difficulty turning off sharp corners.  I asked he was interested in physical therapy assessment but he says he wants to wait till his illness improves.  He denied having slurred speech, dysphagia, and unilateral weakness.
+
+
+Assessment and Plan:
+In summary, Robert Foulds is a 79 year old gentleman with Parkinson's disease presents in with altered level of consciousness and query slurred speech with right facial droop and he was a code stroke protocol but was deemed not a stroke with findings more consistent with potential delirium given absence of described findings by stroke assessment and negative imaging.  The fluctuating confusion course is more in keeping with delirium with a potential cause being pneumonia for which he was partially treated. Unclear about levofloxacin dosage but he is hemodynamically stable and does not require any supplemental oxygen.  Terms of his active issues, they are as follows:
+
+1. Altered LOC - delirium.
+- Most likely community acquired pneumonia given positive spine sign, elevated CRP, and green productive sputum. He has been respiratory virus swabbed in the event he had a viral infection leading to concomitant bacterial infection
+- We will treat him with ceftriaxone until we can clarify his levofloxacin dosage.  Blood culture sent and are pending.
+- He has a number of medications but will ask pharmacy to assess if any are delirium causing but I do not think so.  No visible metabolic causes.  No structural causes.
+- Arrange for x-ray abdomen to rule constipation, bladder scan to rule out urinary retention, and he denied any pain.
+-Once blood cultures come back, I think he can be discharged home with oral antibiotics.
+
+2. Subclinical hypothyroidism (sick euthyroid) - repeat TSH in 6 weeks
+
+3. Elevated troponin - likely demand ischemia. Will trend. No ischemic symptoms of chest pain. We will get ECG
+
+4. Best practices
+- DVT prophylaxis
+- CODE STATUS: presumed full code
+- PT/OT
+""")
+
+#%% Appending docs for GG
 doc_list.append("""Document date: June 19, 2023
 Document type: Progress note
 
@@ -358,9 +394,10 @@ Resolved issues:
 - Decreasing albumin likely nutritional rather than hepatic 
 """)
 
+
 doc_list.append("""
 """)
-
+#%% Append docs for Seb
 
 doc_list.append("""Document date: April 25, 2023
 Term infant born through SVD, with prolonged ROM, presenting with increased work of breathing at 7 minutes of life, requiring CPAP. Presentation is most consistent with TTN. No risk factors for RDS (no prematurity, not IDM). No meconium, so meconium aspiration unlikely. Normal oxygen saturation on room air, so unlikely congenital heart disease.
@@ -989,6 +1026,131 @@ print(response["choices"][0]["message"]["content"])
 #%% V2 - modular processing 
 
 
+
+event_grps = """
+1. Clinical events
+2. Investigation results events
+3. Patient care event
+4. Therapy event
+5. Medication event
+6. Procedural event
+7. Logistical event
+"""
+
+system_query = (
+    "You are a healthcare professional that understands medical jargon and medical abbreviations. "
+    "You will be given a medical note to extract medical events into a Markdown table. "
+    "Below is an outline of the types of medical events that you are interested in:\n"
+    F"{event_grps}"
+    # "Below is a collection of medical notes on a patient throughout their hospital stay."
+    # "Each medical note is delimited by a 'Document date: <date of medical note>'"
+    # "header which also indicates which date the medical note was taken."
+    )
+
+
+def genQuery(doc):
+    query = (
+        "Below is a clinical document:\n\n"
+        F"{doc}\n\n"
+        "Extract all clinical events and occurrences from the above clinical document into a Markdown table. "
+        "Each row should only have ONE clinical event (i.e., each clinical should be its own row. "
+        "Deduce the event date using the document date as reference "
+        "(e.g., if note mentions 'done yesterday' then the date of the event would be one day before the document date). "
+        "Again, each clinical event should be added to another row. "
+        "The table should have the following header: \n"
+        "| Medical problem that event is related to | "
+        "Clinical event | "
+        "Event date (or 'N/A' if not mentioned) | "
+        "Reasoning for 'Event date' output |\n"
+        "| ------- | ------- | ------- | ------- |"
+        # "List all of the medical events in the above medical document, "
+        # "grouped according to the above event groupings in a Markdown table. "
+        # "If a group does not have any events, report 'None mentioned'. "
+        # "Here is the header of the Markdown table:\n"
+        # "| Event type (Clinical, ) | Investigation events | Patient care events | Medication events | Procedural events |\n"
+        # "| --- | --- | --- | --- | --- |"
+    )
+    return query
+
+responses_list: list[GPTResponse] = []
+print(system_query)
+
+for i in range(4):
+    doc_query = genQuery(doc_list[i])
+    match = re.search(R"Document date: ([^\n]+)\n", doc_list[i], re.M)
+    # print(doc_query)
+
+    doc_date = match.group(1)
+    print(doc_date)
+    response = queryGPT(doc_query, system_query)
+    gpt_response = GPTResponse(doc_date,
+                               response["choices"][0]["message"]["content"],
+                               response)
+    responses_list.append(gpt_response)
+    print(gpt_response.string)
+
+responses_raw_list: list[str] = [r.string for r in responses_list]
+
+
+#%%
+responses_df = pd.DataFrame()
+for gpt_response in responses_list:
+    print(gpt_response.string)
+    df = pd.read_csv(StringIO(gpt_response.string), sep="|")
+    df = df.iloc[1:] # Skip first column which is the division border
+    df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # Remove unnamed columns
+    df.columns = df.columns.str.strip() # Strip whitespace from column name ends
+    df = df.rename(columns={COL_DATE: COL_DATE_NEW})
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x) # Strip spaces from strings
+    df[COL_DATE_NEW] = df[COL_DATE_NEW].str.replace("N/A", F"({gpt_response.date})")
+    responses_df = pd.concat([responses_df, df])
+#%%
+responses_df = responses_df.drop([COL_REASON], axis=1) # Drop reasoning to compress data
+responses_df = responses_df.drop_duplicates() # Drop identicals 
+responses_df = responses_df.sort_values(COL_MEDPROB)
+responses_md = responses_df.to_markdown(index=False)
+responses_md = re.sub(R" {3,}", " ", responses_md) # Remove excess whitespace to reduce token count
+responses_md = re.sub(R":-{3,}", " ----- ", responses_md)
+
+print(responses_md)
+#%% Events merging
+
+event_grps = """
+1. Clinical events
+2. Investigation results events
+3. Patient care event
+4. Therapy event
+5. Medication event
+6. Procedural event
+7. Logistical event
+"""
+system_query = (
+    "You are a healthcare professional that understands medical jargon and medical abbreviations. "
+    "You will be given a Markdown table of clinical events for a single patient. "
+    "Below is an outline of the 7 broad types of medical events that you are interested in:\n"
+    F"{event_grps}"
+    )
+
+def genQuery(doc):
+    query = (
+        "Below is a Markdown table of clinical events with dates for a single patient. :\n\n"
+        F"{doc}\n\n"
+        "Merge rows in the above Markdown table if they fit both of the following criteria:\n"
+        F"1) Clinical events descriptions under '{COL_EVENT}' are similar in meaning\n"
+        F"2) Date(s) under '{COL_DATE_NEW}' are close\n"
+        F"The date of the new row should include all dates of rows being merged."
+    )
+    return query
+
+doc_query = genQuery(responses_md)
+response = queryGPT(doc_query, system_query, model="gpt-3.5-turbo-16k")
+response_raw = response["choices"][0]["message"]["content"]
+match = re.search(R"((\|[^|\r\n]*)+\|(\r?\n|\r)?)+", response_raw, re.M) # Capture only Markdown output
+response_md = match.group(0)
+print(response_md)
+
+#%% Events processing 
+
 event_grps = """
 1. Clinical events. For example:
 	- Patient complaint or symptom
@@ -1026,7 +1188,8 @@ event_grps = """
 	- Communication between healthcare professionals (e.g., "Dr. Smith spoke to Dr. Lee")
 	- Consult to another medical specialty 
 	- Consult to allied health (e.g., occupational/physical therapy, pharmacy)
-	- Transfer to another ward or facility 
+	- Transfer to another ward or facility
+8. Other event. Any event that doesn't fit the above descriptions.
 """
 event_grps = """
 1. Clinical events
@@ -1037,78 +1200,65 @@ event_grps = """
 6. Procedural event
 7. Logistical event
 """
-
 system_query = (
     "You are a healthcare professional that understands medical jargon and medical abbreviations. "
-    "You will be given a medical note to extract medical events into a Markdown table. "
-    "Below is an outline of the types of medical events that you are interested in:\n"
+    "You will be given a Markdown table of clinical events for a single patient. "
+    "Below is an outline of the 7 broad types of medical events that you are interested in:\n"
     F"{event_grps}"
-    # "Below is a collection of medical notes on a patient throughout their hospital stay."
-    # "Each medical note is delimited by a 'Document date: <date of medical note>'"
-    # "header which also indicates which date the medical note was taken."
     )
 
 def genQuery(doc):
     query = (
-        "Below is a clinical document:\n\n"
+        "Below is a Markdown table of clinical events with dates for a single patient. :\n\n"
         F"{doc}\n\n"
-        "Extract all clinical events and occurrences from the above clinical document into a Markdown table. "
-        "Each row should only have ONE clinical event (i.e., each clinical should be its own row. "
-        "Deduce the event date using the document date as reference "
-        "(e.g., if note mentions 'done yesterday' then the date of the event would be one day before the document date). "
-        "Again, each clinical event should be added to another row. "
-        "The table should have the following header: \n"
-        "| Medical problem that event is related to | "
-        "Clinical event | "
-        "Event date (or 'N/A' if not mentioned) | "
-        "Reasoning for 'Event date' output |\n"
-        "| ------- | ------- | ------- | ------- |"
-        # "List all of the medical events in the above medical document, "
-        # "grouped according to the above event groupings in a Markdown table. "
-        # "If a group does not have any events, report 'None mentioned'. "
-        # "Here is the header of the Markdown table:\n"
-        # "| Event type (Clinical, ) | Investigation events | Patient care events | Medication events | Procedural events |\n"
-        # "| --- | --- | --- | --- | --- |"
+        "Split the clinical events into 7 different Markdown tables base on the "
+        "aforementioned 7 types of medical events:\n"
+
     )
     return query
 
-responses_list: list[GPTResponse] = []
-print(system_query)
-
-for i in range(4):
-    doc_query = genQuery(doc_list[i])
-    match = re.search(R"Document date: ([^\n]+)\n", doc_list[0], re.M)
-    print(doc_query)
-
-    doc_date = match.group(1)
-    response = queryGPT(doc_query, system_query)
-    gpt_response = GPTResponse(doc_date,
-                               response["choices"][0]["message"]["content"],
-                               response)
-    responses_list.append(gpt_response)
-    print(gpt_response.string)
-
-responses_raw_list: list[str] = [r.string for r in responses_list]
-
+doc_query = genQuery(responses_md)
+response = queryGPT(doc_query, system_query, model="gpt-3.5-turbo-16k")
+print(response["choices"][0]["message"]["content"])
 
 #%%
-responses_df = pd.DataFrame()
-for gpt_response in responses_list:
-    print(gpt_response.string)
-    df = pd.read_csv(StringIO(gpt_response.string), sep="|")
+response_raw = response["choices"][0]["message"]["content"]
+matches = re.finditer(R"((\|[^|\r\n]*)+\|(\r?\n|\r)?)+", response_raw, re.M) # findall only returns first line for some reason 
+responses_df: list[pd.DataFrame] = []
+for match in matches:
+    df = pd.read_csv(StringIO(match.group(0)), sep="|")
     df = df.iloc[1:] # Skip first column which is the division border
     df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # Remove unnamed columns
     df.columns = df.columns.str.strip() # Strip whitespace from column name ends
     df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x) # Strip spaces from strings
-    df[COL_DATE] = df[COL_DATE].str.replace("N/A", F"({gpt_response.date})")
-    responses_df = pd.concat([responses_df, df])
-
-responses_df = responses_df.drop([COL_REASON], axis=1) # Drop reasoning to compress data
-responses_df.sort_values(COL_MEDPROB)
+    responses_df.append(df)
+    
 #%%
-responses_md = responses_df.to_markdown(index=False)
-print(responses_md)
-
+labels = ["1. Clinical events",
+        "2. Investigation results events",
+        "3. Patient care event",
+        "4. Therapy event",
+        "5. Medication event",
+        "6. Procedural event",
+        "7. Logistical event",]
+for ind, df in enumerate(responses_df):
+    print(F"====== {labels[ind]} =========")
+    for issue in df[COL_MEDPROB].unique():
+        subset: pd.DataFrame = df.loc[df[COL_MEDPROB] == issue]
+        output_str = F"{issue}\n"
+        for ind, row in subset.iterrows():
+            output_str += F"- {row[COL_EVENT]} - {row[COL_DATE_NEW]}\n"
+        print(output_str)
 #%%
-match = re.search(R"Document date: ([^\n]+)\n", doc_list[0], re.M)
-match.group(1)
+df = pd.read_csv(StringIO(response_md), sep="|")
+df = df.iloc[1:] # Skip first column which is the division border
+df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # Remove unnamed columns
+df.columns = df.columns.str.strip() # Strip whitespace from column name ends
+df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x) # Strip spaces from strings
+responses_df.append(df)
+for issue in df[COL_MEDPROB].unique():
+        subset: pd.DataFrame = df.loc[df[COL_MEDPROB] == issue]
+        output_str = F"{issue}\n"
+        for ind, row in subset.iterrows():
+            output_str += F"- {row[COL_EVENT]} - {row[COL_DATE_NEW]}\n"
+        print(output_str)
